@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	_ "github.com/joho/godotenv/autoload"
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/certificate"
 	"github.com/sideshow/apns2/payload"
@@ -74,8 +75,9 @@ func main() {
 	// Define the HTTP server and routes
 	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(client))
 	// Start the HTTP server
-	log.Println("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	addr := os.Getenv("RCPG_ADDR")
+	log.Printf("Starting server on %s", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
 }
