@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"io/ioutil"
@@ -69,11 +70,13 @@ func main() {
 	client := apns2.NewClient(cert).Production()
 
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
+		log.Println("infoHandler for: ", req)
 		io.WriteString(w, "Rocket.Chat Push Gateway\n")
 	}
 	http.HandleFunc("/", infoHandler)
 
 	// Define the HTTP server and routes
+	http.HandleFunc("/push/gcm/send", GCMPushNotificationHandler)
 	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(client))
 	// Start the HTTP server
 	addr := os.Getenv("RCPG_ADDR")
@@ -110,6 +113,11 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		}
 
 		opt := &notification.Options
+
+		if opt.Topic == "chat.rocket.ios" {
+			forward(w, r, body)
+			return
+		}
 
 		ejson, _ := json.Marshal(opt.Payload)
 
@@ -170,4 +178,56 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		// Send a success response
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Read the request body
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Println("Failed to read request body: ", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received push request: %s", body)
+
+	forward(w, r, body)
+}
+
+func copyHeader(dst, src http.Header) {
+	for k, vv := range src {
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
+func forward(w http.ResponseWriter, r *http.Request, body []byte) {
+	log.Println("forwarding request: ", r)
+	r.RequestURI = ""
+	r.Host = ""
+	r.URL.Scheme = "https"
+	r.URL.Host = "gateway.rocket.chat"
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.Header.Del("Connection")
+
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		log.Println("Failed to forward request: ", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	body, _ = ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	log.Println("response from upstream: ", resp, body)
+	copyHeader(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
 }
