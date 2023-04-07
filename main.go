@@ -59,8 +59,31 @@ type RCPayload struct {
 	Type       string `json:"type"`
 }
 
-func getReqID(req *http.Request) string {
-	return fmt.Sprintf("[%#p]", req.Context())
+const debug = true
+
+type reqLogger struct {
+	r *http.Request
+}
+
+func l(r *http.Request) reqLogger {
+	return reqLogger{r}
+}
+
+func (l reqLogger) Printf(s string, v ...any) {
+	id := fmt.Sprintf("[%#p]", l.r.Context())
+	s = id + " " + s
+	log.Printf(s, v...)
+}
+
+func (l reqLogger) Debugf(s string, v ...any) {
+	if !debug {
+		return
+	}
+	l.Printf(s, v...)
+}
+
+func (l reqLogger) Errorf(s string, v ...any) {
+	l.Printf(s, v...)
 }
 
 func main() {
@@ -101,18 +124,18 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		// Read the request body
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Println(getReqID(r), "Failed to read request body: ", err)
+			l(r).Errorf("Failed to read request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		log.Printf("%s Received push request: %+v %s", getReqID(r), r, string(body))
+		l(r).Debugf("Received push request: %+v %s", r, body)
 
 		// Parse the request body
 		var notification RCPushNotification
 		err = json.Unmarshal(body, &notification)
 		if err != nil {
-			log.Println(getReqID(r), "Failed to parse request body: ", err)
+			l(r).Errorf("Failed to parse request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -129,7 +152,7 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		var rcPayload RCPayload
 		err = json.Unmarshal(ejson, &rcPayload)
 		if err != nil {
-			log.Println(getReqID(r), "Failed to parse request payload: ", err)
+			l(r).Errorf("Failed to parse request payload: %v", err)
 		}
 
 		// Create the notification payload
@@ -161,24 +184,24 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		}
 
 		nJSON, _ := n.MarshalJSON()
-		log.Println(getReqID(r), "Sending notification: ", string(nJSON))
+		l(r).Debugf("Sending notification: %s", nJSON)
 
 		// Send the notification
 		res, err := client.Push(n)
 		if err != nil {
-			log.Println(getReqID(r), "Failed to send notification: ", err)
+			l(r).Errorf("Failed to send notification: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		if !res.Sent() {
-			log.Printf("%s Failed to send notification: %+v", getReqID(r), res)
+			l(r).Errorf("Failed to send notification: %+v", res)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		// Log the response
-		log.Printf("%s Notification sent: %+v", getReqID(r), res)
+		l(r).Debugf("Notification sent: %+v", res)
 
 		// Send a success response
 		w.WriteHeader(http.StatusOK)
@@ -194,12 +217,12 @@ func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
 	// Read the request body
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		log.Println(getReqID(r), "Failed to read request body: ", err)
+		l(r).Errorf("Failed to read request body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	log.Println(getReqID(r), "Received push request: ", string(body))
+	l(r).Debugf("Received push request: %s", body)
 
 	forward(w, r, body)
 }
@@ -213,7 +236,7 @@ func copyHeader(dst, src http.Header) {
 }
 
 func forward(w http.ResponseWriter, r *http.Request, body []byte) {
-	log.Printf("%s Forwarding request: %+v", getReqID(r), r)
+	l(r).Debugf("Forwarding request: %+v", r)
 	r.RequestURI = ""
 	r.Host = ""
 	r.URL.Scheme = "https"
@@ -223,7 +246,7 @@ func forward(w http.ResponseWriter, r *http.Request, body []byte) {
 
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
-		log.Println(getReqID(r), "Failed to forward request: ", err)
+		l(r).Errorf("Failed to forward request: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -231,7 +254,7 @@ func forward(w http.ResponseWriter, r *http.Request, body []byte) {
 	body, _ = ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	log.Printf("%s Response from upstream: %+v %s", getReqID(r), resp, body)
+	l(r).Debugf("Response from upstream: %+v %s", resp, body)
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
