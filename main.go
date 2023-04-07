@@ -19,6 +19,7 @@ import (
 const (
 	debug             = true
 	apnsUpstreamTopic = "chat.rocket.ios"
+	upstreamGateway   = "gateway.rocket.chat"
 )
 
 var apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
@@ -247,11 +248,11 @@ func copyHeader(dst, src http.Header) {
 }
 
 func forward(w http.ResponseWriter, r *http.Request, body []byte) {
-	l(r).Debugf("Forwarding request: %+v", r)
+	l(r).Debugf("Forwarding request to upstream")
 	r.RequestURI = ""
 	r.Host = ""
 	r.URL.Scheme = "https"
-	r.URL.Host = "gateway.rocket.chat"
+	r.URL.Host = upstreamGateway
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.Header.Del("Connection")
 
