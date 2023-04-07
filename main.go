@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -58,6 +59,10 @@ type RCPayload struct {
 	Type       string `json:"type"`
 }
 
+func getReqID(req *http.Request) string {
+	return fmt.Sprintf("[%#p]", req.Context())
+}
+
 func main() {
 	cert, err := certificate.FromP12File(
 		os.Getenv("RCPG_APNS_CERT_FILE"),
@@ -66,11 +71,11 @@ func main() {
 	if err != nil {
 		log.Fatal("Cert Error:", err)
 	}
-	//client := apns2.NewClient(cert).Development()
+	// client := apns2.NewClient(cert).Development()
 	client := apns2.NewClient(cert).Production()
 
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
-		log.Println("infoHandler for: ", req)
+		log.Printf("InfoHandler for: %+v", req)
 		io.WriteString(w, "Rocket.Chat Push Gateway\n")
 	}
 	http.HandleFunc("/", infoHandler)
@@ -80,7 +85,7 @@ func main() {
 	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(client))
 	// Start the HTTP server
 	addr := os.Getenv("RCPG_ADDR")
-	log.Printf("Starting server on %s", addr)
+	log.Println("Starting server on", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
@@ -96,18 +101,18 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		// Read the request body
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Println("Failed to read request body: ", err)
+			log.Println(getReqID(r), "Failed to read request body: ", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		log.Printf("Received push request: %s", body)
+		log.Printf("%s Received push request: %+v %s", getReqID(r), r, string(body))
 
 		// Parse the request body
 		var notification RCPushNotification
 		err = json.Unmarshal(body, &notification)
 		if err != nil {
-			log.Println("Failed to parse request body: ", err)
+			log.Println(getReqID(r), "Failed to parse request body: ", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -124,7 +129,7 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		var rcPayload RCPayload
 		err = json.Unmarshal(ejson, &rcPayload)
 		if err != nil {
-			log.Println("Failed to parse request payload: ", err)
+			log.Println(getReqID(r), "Failed to parse request payload: ", err)
 		}
 
 		// Create the notification payload
@@ -156,24 +161,24 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		}
 
 		nJSON, _ := n.MarshalJSON()
-		log.Println("Sending notification: ", string(nJSON))
+		log.Println(getReqID(r), "Sending notification: ", string(nJSON))
 
 		// Send the notification
 		res, err := client.Push(n)
 		if err != nil {
-			log.Println("Failed to send notification: ", err)
+			log.Println(getReqID(r), "Failed to send notification: ", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		if !res.Sent() {
-			log.Println("Failed to send notification: ", res)
+			log.Printf("%s Failed to send notification: %+v", getReqID(r), res)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		// Log the response
-		log.Println("Notification sent: ", res)
+		log.Printf("%s Notification sent: %+v", getReqID(r), res)
 
 		// Send a success response
 		w.WriteHeader(http.StatusOK)
@@ -189,12 +194,12 @@ func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
 	// Read the request body
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		log.Println("Failed to read request body: ", err)
+		log.Println(getReqID(r), "Failed to read request body: ", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Received push request: %s", body)
+	log.Println(getReqID(r), "Received push request: ", string(body))
 
 	forward(w, r, body)
 }
@@ -208,7 +213,7 @@ func copyHeader(dst, src http.Header) {
 }
 
 func forward(w http.ResponseWriter, r *http.Request, body []byte) {
-	log.Println("forwarding request: ", r)
+	log.Printf("%s Forwarding request: %+v", getReqID(r), r)
 	r.RequestURI = ""
 	r.Host = ""
 	r.URL.Scheme = "https"
@@ -218,7 +223,7 @@ func forward(w http.ResponseWriter, r *http.Request, body []byte) {
 
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
-		log.Println("Failed to forward request: ", err)
+		log.Println(getReqID(r), "Failed to forward request: ", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -226,7 +231,7 @@ func forward(w http.ResponseWriter, r *http.Request, body []byte) {
 	body, _ = ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	log.Println("response from upstream: ", resp, body)
+	log.Printf("%s Response from upstream: %+v %s", getReqID(r), resp, body)
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
