@@ -16,6 +16,13 @@ import (
 	"github.com/sideshow/apns2/payload"
 )
 
+const (
+	debug             = true
+	apnsUpstreamTopic = "chat.rocket.ios"
+)
+
+var apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
+
 // Define a struct to hold the JSON payload
 type RCPushNotification struct {
 	Token   string `json:"token"`
@@ -58,8 +65,6 @@ type RCPayload struct {
 	SenderName string `json:"senderName"`
 	Type       string `json:"type"`
 }
-
-const debug = true
 
 type reqLogger struct {
 	r *http.Request
@@ -142,8 +147,14 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 
 		opt := &notification.Options
 
-		if opt.Topic == "chat.rocket.ios" {
+		if opt.Topic == apnsUpstreamTopic {
 			forward(w, r, body)
+			return
+		}
+
+		if opt.Topic != apnsTopic {
+			l(r).Errorf("Unknown APNs topic: %s", opt.Topic)
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
