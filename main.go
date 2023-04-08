@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/sideshow/apns2"
@@ -17,12 +18,14 @@ import (
 )
 
 const (
-	debug             = true
 	apnsUpstreamTopic = "chat.rocket.ios"
 	upstreamGateway   = "gateway.rocket.chat"
 )
 
-var apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
+var (
+	apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
+	debug, _  = strconv.ParseBool(os.Getenv("RCPG_DEBUG"))
+)
 
 // Define a struct to hold the JSON payload
 type RCPushNotification struct {
@@ -89,6 +92,7 @@ func (l reqLogger) Debugf(s string, v ...any) {
 }
 
 func (l reqLogger) Errorf(s string, v ...any) {
+	l.Printf("Error for request %+v", l.r)
 	l.Printf(s, v...)
 }
 
@@ -167,6 +171,8 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			l(r).Errorf("Failed to parse request payload: %v", err)
 		}
 
+		l(r).Printf("APN from %s to %s", rcPayload.Host, opt.Topic)
+
 		// Create the notification payload
 		p := payload.NewPayload().
 			AlertTitle(opt.Title).
@@ -234,6 +240,7 @@ func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	l(r).Printf("GCM")
 	l(r).Debugf("Received push request: %s", body)
 
 	forward(w, r, body)
@@ -268,6 +275,9 @@ func forward(w http.ResponseWriter, r *http.Request, body []byte) {
 
 	l(r).Debugf("Response from upstream: %+v %s", resp, body)
 	copyHeader(w.Header(), resp.Header)
+	if resp.StatusCode >= 300 {
+		l(r).Errorf("Forwarding failed: %+v", resp)
+	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)
 }
