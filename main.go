@@ -70,16 +70,23 @@ type RCPayload struct {
 	Type       string `json:"type"`
 }
 
-type reqLogger struct {
-	r *http.Request
+type RCRequest struct {
+	http    *http.Request
+	body    []byte
+	data    RCPushNotification
+	payload RCPayload
 }
 
-func l(r *http.Request) reqLogger {
+type reqLogger struct {
+	r *RCRequest
+}
+
+func l(r *RCRequest) reqLogger {
 	return reqLogger{r}
 }
 
 func (l reqLogger) Printf(s string, v ...any) {
-	id := fmt.Sprintf("[%#p]", l.r.Context())
+	id := fmt.Sprintf("[%#p]", l.r.http.Context())
 	s = id + " " + s
 	log.Printf(s, v...)
 }
@@ -92,7 +99,8 @@ func (l reqLogger) Debugf(s string, v ...any) {
 }
 
 func (l reqLogger) Errorf(s string, v ...any) {
-	l.Printf("Error for request %+v", l.r)
+	s = s + "\nRequest: %+v\nBody: %s"
+	v = append(v, l.r.http, l.r.body)
 	l.Printf(s, v...)
 }
 
@@ -124,51 +132,51 @@ func main() {
 	}
 }
 
-func parseRequest(w http.ResponseWriter, r *http.Request) ([]byte, *RCPushNotification, *RCPayload) {
-	if r.Method != http.MethodPost {
+func parseRequest(w http.ResponseWriter, http_ *http.Request) *RCRequest {
+	r := &RCRequest{http: http_}
+	if http_.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return nil, nil, nil
+		return nil
 	}
 
 	// Read the request body
-	body, err := ioutil.ReadAll(r.Body)
+	var err error
+	r.body, err = ioutil.ReadAll(http_.Body)
 	if err != nil {
 		l(r).Errorf("Failed to read request body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
-		return nil, nil, nil
+		return nil
 	}
 
-	l(r).Debugf("Received push request: %+v %s", r, body)
+	l(r).Debugf("Received push request: %+v %s", http_, r.body)
 
 	// Parse the request body
-	var notification RCPushNotification
-	err = json.Unmarshal(body, &notification)
+	err = json.Unmarshal(r.body, &r.data)
 	if err != nil {
 		l(r).Errorf("Failed to parse request body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
-		return nil, nil, nil
+		return nil
 	}
 
-	var rcPayload RCPayload
-	err = json.Unmarshal(notification.Options.RawPayload, &rcPayload)
+	err = json.Unmarshal(r.data.Options.RawPayload, &r.payload)
 	if err != nil {
 		l(r).Errorf("Failed to parse request payload: %v", err)
 	}
 
-	return body, &notification, &rcPayload
+	return r
 }
 
 func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		body, notification, rcPayload := parseRequest(w, r)
-		if body == nil {
+	return func(w http.ResponseWriter, http_ *http.Request) {
+		r := parseRequest(w, http_)
+		if r == nil {
 			return
 		}
 
-		opt := &notification.Options
+		opt := &r.data.Options
 
 		if opt.Topic == apnsUpstreamTopic {
-			forward(w, r, body)
+			forward(w, r)
 			return
 		}
 
@@ -178,7 +186,7 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			return
 		}
 
-		l(r).Printf("APN from %s to %s", rcPayload.Host, opt.Topic)
+		l(r).Printf("APN from %s to %s", r.payload.Host, opt.Topic)
 
 		// Create the notification payload
 		p := apnsPayload.NewPayload().
@@ -196,14 +204,14 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			p.AlertBody(opt.Apn.Text)
 		}
 
-		if rcPayload.NotificationType == "message-id-only" {
+		if r.payload.NotificationType == "message-id-only" {
 			p.MutableContent()
 			p.ContentAvailable()
 		}
 
 		// Create the notification
 		n := &apns2.Notification{
-			DeviceToken: notification.Token,
+			DeviceToken: r.data.Token,
 			Topic:       opt.Topic,
 			Payload:     p,
 		}
@@ -233,15 +241,15 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 	}
 }
 
-func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
-	body, _, rcPayload := parseRequest(w, r)
-	if body == nil {
+func GCMPushNotificationHandler(w http.ResponseWriter, http_ *http.Request) {
+	r := parseRequest(w, http_)
+	if r == nil {
 		return
 	}
 
-	l(r).Printf("GCM from %s", rcPayload.Host)
+	l(r).Printf("GCM from %s", r.payload.Host)
 
-	forward(w, r, body)
+	forward(w, r)
 }
 
 func copyHeader(dst, src http.Header) {
@@ -252,23 +260,23 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func forward(w http.ResponseWriter, r *http.Request, body []byte) {
+func forward(w http.ResponseWriter, r *RCRequest) {
 	l(r).Debugf("Forwarding request to upstream")
-	r.RequestURI = ""
-	r.Host = ""
-	r.URL.Scheme = "https"
-	r.URL.Host = upstreamGateway
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.Header.Del("Connection")
+	r.http.RequestURI = ""
+	r.http.Host = ""
+	r.http.URL.Scheme = "https"
+	r.http.URL.Host = upstreamGateway
+	r.http.Body = io.NopCloser(bytes.NewReader(r.body))
+	r.http.Header.Del("Connection")
 
-	resp, err := http.DefaultClient.Do(r)
+	resp, err := http.DefaultClient.Do(r.http)
 	if err != nil {
 		l(r).Errorf("Failed to forward request: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	body, _ = ioutil.ReadAll(resp.Body)
+	body, _ := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 
 	l(r).Debugf("Response from upstream: %+v %s", resp, body)
