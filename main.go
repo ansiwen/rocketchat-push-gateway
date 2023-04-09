@@ -13,8 +13,8 @@ import (
 
 	_ "github.com/joho/godotenv/autoload"
 	"github.com/sideshow/apns2"
-	"github.com/sideshow/apns2/certificate"
-	"github.com/sideshow/apns2/payload"
+	apnsCertificate "github.com/sideshow/apns2/certificate"
+	apnsPayload "github.com/sideshow/apns2/payload"
 )
 
 const (
@@ -31,19 +31,19 @@ var (
 type RCPushNotification struct {
 	Token   string `json:"token"`
 	Options struct {
-		CreatedAt string      `json:"createdAt"`
-		CreatedBy string      `json:"createdBy"`
-		Sent      bool        `json:"sent"`
-		Sending   int         `json:"sending"`
-		From      string      `json:"from"`
-		Title     string      `json:"title"`
-		Text      string      `json:"text"`
-		UserId    string      `json:"userId"`
-		Payload   interface{} `json:"payload"`
-		Badge     int         `json:"badge"`
-		Sound     string      `json:"sound"`
-		NotId     int         `json:"notId"`
-		Apn       struct {
+		CreatedAt  string          `json:"createdAt"`
+		CreatedBy  string          `json:"createdBy"`
+		Sent       bool            `json:"sent"`
+		Sending    int             `json:"sending"`
+		From       string          `json:"from"`
+		Title      string          `json:"title"`
+		Text       string          `json:"text"`
+		UserId     string          `json:"userId"`
+		RawPayload json.RawMessage `json:"payload"`
+		Badge      int             `json:"badge"`
+		Sound      string          `json:"sound"`
+		NotId      int             `json:"notId"`
+		Apn        struct {
 			Category string `json:"category"`
 			Text     string `json:"text"`
 		} `json:"apn"`
@@ -97,7 +97,7 @@ func (l reqLogger) Errorf(s string, v ...any) {
 }
 
 func main() {
-	cert, err := certificate.FromP12File(
+	cert, err := apnsCertificate.FromP12File(
 		os.Getenv("RCPG_APNS_CERT_FILE"),
 		os.Getenv("RCPG_APNS_CERT_PASS"),
 	)
@@ -124,29 +124,44 @@ func main() {
 	}
 }
 
+func parseRequest(w http.ResponseWriter, r *http.Request) ([]byte, *RCPushNotification, *RCPayload) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return nil, nil, nil
+	}
+
+	// Read the request body
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		l(r).Errorf("Failed to read request body: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return nil, nil, nil
+	}
+
+	l(r).Debugf("Received push request: %+v %s", r, body)
+
+	// Parse the request body
+	var notification RCPushNotification
+	err = json.Unmarshal(body, &notification)
+	if err != nil {
+		l(r).Errorf("Failed to parse request body: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return nil, nil, nil
+	}
+
+	var rcPayload RCPayload
+	err = json.Unmarshal(notification.Options.RawPayload, &rcPayload)
+	if err != nil {
+		l(r).Errorf("Failed to parse request payload: %v", err)
+	}
+
+	return body, &notification, &rcPayload
+}
+
 func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Read the request body
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			l(r).Errorf("Failed to read request body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		l(r).Debugf("Received push request: %+v %s", r, body)
-
-		// Parse the request body
-		var notification RCPushNotification
-		err = json.Unmarshal(body, &notification)
-		if err != nil {
-			l(r).Errorf("Failed to parse request body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
+		body, notification, rcPayload := parseRequest(w, r)
+		if body == nil {
 			return
 		}
 
@@ -163,23 +178,15 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			return
 		}
 
-		ejson, _ := json.Marshal(opt.Payload)
-
-		var rcPayload RCPayload
-		err = json.Unmarshal(ejson, &rcPayload)
-		if err != nil {
-			l(r).Errorf("Failed to parse request payload: %v", err)
-		}
-
 		l(r).Printf("APN from %s to %s", rcPayload.Host, opt.Topic)
 
 		// Create the notification payload
-		p := payload.NewPayload().
+		p := apnsPayload.NewPayload().
 			AlertTitle(opt.Title).
 			AlertBody(opt.Text).
 			Badge(opt.Badge).
 			Sound(opt.Sound).
-			Custom("ejson", string(ejson))
+			Custom("ejson", string(opt.RawPayload))
 
 		if opt.Apn.Category != "" {
 			p.Category(opt.Apn.Category)
@@ -227,21 +234,12 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 }
 
 func GCMPushNotificationHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	body, _, rcPayload := parseRequest(w, r)
+	if body == nil {
 		return
 	}
 
-	// Read the request body
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		l(r).Errorf("Failed to read request body: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	l(r).Printf("GCM")
-	l(r).Debugf("Received push request: %s", body)
+	l(r).Printf("GCM from %s", rcPayload.Host)
 
 	forward(w, r, body)
 }
