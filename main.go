@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,9 +13,14 @@ import (
 	"strconv"
 
 	_ "github.com/joho/godotenv/autoload"
+
 	"github.com/sideshow/apns2"
 	apnsCertificate "github.com/sideshow/apns2/certificate"
 	apnsPayload "github.com/sideshow/apns2/payload"
+
+	firebase "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/messaging"
+	"google.golang.org/api/option"
 )
 
 const (
@@ -112,8 +118,18 @@ func main() {
 	if err != nil {
 		log.Fatal("Cert Error:", err)
 	}
-	// client := apns2.NewClient(cert).Development()
-	client := apns2.NewClient(cert).Production()
+	// apnsClient := apns2.NewClient(cert).Development()
+	apnsClient := apns2.NewClient(cert).Production()
+
+	opt := option.WithCredentialsFile(os.Getenv("RCPG_FCM_KEY_FILE"))
+	app, err := firebase.NewApp(context.Background(), nil, opt)
+	if err != nil {
+		log.Fatalf("error initializing app: %v", err)
+	}
+	fcmClient, err := app.Messaging(context.Background())
+	if err != nil {
+		log.Fatalf("error initializing FCM client: %#v", err)
+	}
 
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
 		log.Printf("InfoHandler for: %+v", req)
@@ -122,8 +138,8 @@ func main() {
 	http.HandleFunc("/", infoHandler)
 
 	// Define the HTTP server and routes
-	http.HandleFunc("/push/gcm/send", GCMPushNotificationHandler)
-	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(client))
+	http.HandleFunc("/push/gcm/send", getGCMPushNotificationHandler(fcmClient))
+	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(apnsClient))
 	// Start the HTTP server
 	addr := os.Getenv("RCPG_ADDR")
 	log.Println("Starting server on", addr)
@@ -229,7 +245,13 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 
 		if !res.Sent() {
 			l(r).Errorf("Failed to send notification: %+v", res)
-			w.WriteHeader(http.StatusInternalServerError)
+			if res.Reason == apns2.ReasonBadDeviceToken ||
+				res.Reason == apns2.ReasonDeviceTokenNotForTopic ||
+				res.Reason == apns2.ReasonUnregistered {
+				w.WriteHeader(http.StatusNotAcceptable)
+				return
+			}
+			w.WriteHeader(res.StatusCode)
 			return
 		}
 
@@ -241,15 +263,57 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 	}
 }
 
-func GCMPushNotificationHandler(w http.ResponseWriter, http_ *http.Request) {
-	r := parseRequest(w, http_)
-	if r == nil {
+func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, http_ *http.Request) {
+		r := parseRequest(w, http_)
+		if r == nil {
+			return
+		}
+
+		l(r).Printf("GCM from %s", r.payload.Host)
+
+		opt := r.data.Options
+
+		data := map[string]string{
+			"ejson":   string(opt.RawPayload),
+			"title":   opt.Title,
+			"message": opt.Text,
+			"text":    opt.Text,
+			"image":   opt.Gcm.Image,
+			"msgcnt":  fmt.Sprint(opt.Badge),
+			"sound":   opt.Sound,
+			"notId":   fmt.Sprint(opt.NotId),
+			"style":   opt.Gcm.Style,
+		}
+
+		msg := &messaging.Message{
+			Token: r.data.Token,
+			Android: &messaging.AndroidConfig{
+				CollapseKey: opt.From,
+				Priority:    "high",
+				Data:        data,
+			},
+		}
+
+		_, err := client.Send(context.Background(), msg)
+		if err != nil {
+			log.Printf("error sending FCM msg: %e", err)
+			if messaging.IsUnregistered(err) {
+				w.WriteHeader(http.StatusNotAcceptable)
+				return
+			}
+			if messaging.IsSenderIDMismatch(err) {
+				forward(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// Send a success response
+		w.WriteHeader(http.StatusOK)
 		return
 	}
-
-	l(r).Printf("GCM from %s", r.payload.Host)
-
-	forward(w, r)
 }
 
 func copyHeader(dst, src http.Header) {
