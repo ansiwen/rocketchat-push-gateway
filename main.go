@@ -198,7 +198,7 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 
 		if opt.Topic != apnsTopic {
 			l(r).Errorf("Unknown APNs topic: %s", opt.Topic)
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusNotAcceptable)
 			return
 		}
 
@@ -244,13 +244,14 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 		}
 
 		if !res.Sent() {
-			l(r).Errorf("Failed to send notification: %+v", res)
 			if res.Reason == apns2.ReasonBadDeviceToken ||
 				res.Reason == apns2.ReasonDeviceTokenNotForTopic ||
 				res.Reason == apns2.ReasonUnregistered {
+				l(r).Errorf("Deleting invalid token: %+v", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
+			l(r).Errorf("Failed to send notification: %+v", res)
 			w.WriteHeader(res.StatusCode)
 			return
 		}
@@ -297,8 +298,8 @@ func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseW
 
 		_, err := client.Send(context.Background(), msg)
 		if err != nil {
-			log.Printf("error sending FCM msg: %e", err)
 			if messaging.IsUnregistered(err) {
+				l(r).Errorf("Deleting invalid token: %+v", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
@@ -306,6 +307,7 @@ func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseW
 				forward(w, r)
 				return
 			}
+			l(r).Errorf("error sending FCM msg: %e", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
