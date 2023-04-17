@@ -299,7 +299,7 @@ func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseW
 		_, err := client.Send(context.Background(), msg)
 		if err != nil {
 			if messaging.IsUnregistered(err) {
-				l(r).Errorf("Deleting invalid token: %+v", r.data.Token)
+				l(r).Printf("Deleting invalid token: %+v", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
@@ -327,12 +327,15 @@ func copyHeader(dst, src http.Header) {
 }
 
 func forward(w http.ResponseWriter, r *RCRequest) {
-	l(r).Debugf("Forwarding request to upstream")
+	l(r).Printf("Forwarding request to upstream")
 	r.http.RequestURI = ""
 	r.http.Host = ""
 	r.http.URL.Scheme = "https"
 	r.http.URL.Host = upstreamGateway
-	r.http.Body = io.NopCloser(bytes.NewReader(r.body))
+	r.http.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(r.body)), nil
+	}
+	r.http.Body, _ = r.http.GetBody()
 	r.http.Header.Del("Connection")
 
 	resp, err := http.DefaultClient.Do(r.http)
