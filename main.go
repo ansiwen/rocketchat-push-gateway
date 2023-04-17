@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 
 	_ "github.com/joho/godotenv/autoload"
 
@@ -31,6 +32,7 @@ const (
 var (
 	apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
 	debug, _  = strconv.ParseBool(os.Getenv("RCPG_DEBUG"))
+	reqId     atomic.Uintptr
 )
 
 // Define a struct to hold the JSON payload
@@ -76,7 +78,8 @@ type RCPayload struct {
 	Type       string `json:"type"`
 }
 
-type RCRequest struct {
+type rcRequest struct {
+	id      uint
 	http    *http.Request
 	body    []byte
 	data    RCPushNotification
@@ -84,15 +87,15 @@ type RCRequest struct {
 }
 
 type reqLogger struct {
-	r *RCRequest
+	r *rcRequest
 }
 
-func l(r *RCRequest) reqLogger {
+func l(r *rcRequest) reqLogger {
 	return reqLogger{r}
 }
 
 func (l reqLogger) Printf(s string, v ...any) {
-	id := fmt.Sprintf("[%#p]", l.r.http.Context())
+	id := fmt.Sprintf("[%d]", l.r.id)
 	s = id + " " + s
 	log.Printf(s, v...)
 }
@@ -138,8 +141,8 @@ func main() {
 	http.HandleFunc("/", infoHandler)
 
 	// Define the HTTP server and routes
-	http.HandleFunc("/push/gcm/send", getGCMPushNotificationHandler(fcmClient))
-	http.HandleFunc("/push/apn/send", getAPNPushNotificationHandler(apnsClient))
+	http.HandleFunc("/push/gcm/send", withRCRequest(getGCMPushNotificationHandler(fcmClient)))
+	http.HandleFunc("/push/apn/send", withRCRequest(getAPNPushNotificationHandler(apnsClient)))
 	// Start the HTTP server
 	addr := os.Getenv("RCPG_ADDR")
 	log.Println("Starting server on", addr)
@@ -148,47 +151,46 @@ func main() {
 	}
 }
 
-func parseRequest(w http.ResponseWriter, http_ *http.Request) *RCRequest {
-	r := &RCRequest{http: http_}
-	if http_.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return nil
-	}
-
-	// Read the request body
-	var err error
-	r.body, err = ioutil.ReadAll(http_.Body)
-	if err != nil {
-		l(r).Errorf("Failed to read request body: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return nil
-	}
-
-	l(r).Debugf("Received push request: %+v %s", http_, r.body)
-
-	// Parse the request body
-	err = json.Unmarshal(r.body, &r.data)
-	if err != nil {
-		l(r).Errorf("Failed to parse request body: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return nil
-	}
-
-	err = json.Unmarshal(r.data.Options.RawPayload, &r.payload)
-	if err != nil {
-		l(r).Errorf("Failed to parse request payload: %v", err)
-	}
-
-	return r
-}
-
-func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWriter, *http.Request) {
+func withRCRequest(handler func(http.ResponseWriter, *rcRequest)) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, http_ *http.Request) {
-		r := parseRequest(w, http_)
-		if r == nil {
+		r := &rcRequest{http: http_}
+		r.id = uint(reqId.Add(1))
+		if r.http.Method != http.MethodPost {
+			l(r).Errorf("Method not allowed: %v", r.http.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 
+		// Read the request body
+		var err error
+		r.body, err = ioutil.ReadAll(http_.Body)
+		if err != nil {
+			l(r).Errorf("Failed to read request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		l(r).Debugf("Received push request: %+v %s", http_, r.body)
+
+		// Parse the request body
+		err = json.Unmarshal(r.body, &r.data)
+		if err != nil {
+			l(r).Errorf("Failed to parse request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		err = json.Unmarshal(r.data.Options.RawPayload, &r.payload)
+		if err != nil {
+			l(r).Errorf("Failed to parse request payload: %v", err)
+		}
+
+		handler(w, r)
+	}
+}
+
+func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWriter, *rcRequest) {
+	return func(w http.ResponseWriter, r *rcRequest) {
 		opt := &r.data.Options
 
 		if opt.Topic == apnsUpstreamTopic {
@@ -264,13 +266,8 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 	}
 }
 
-func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, http_ *http.Request) {
-		r := parseRequest(w, http_)
-		if r == nil {
-			return
-		}
-
+func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseWriter, *rcRequest) {
+	return func(w http.ResponseWriter, r *rcRequest) {
 		l(r).Printf("GCM from %s", r.payload.Host)
 
 		opt := r.data.Options
@@ -326,7 +323,7 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-func forward(w http.ResponseWriter, r *RCRequest) {
+func forward(w http.ResponseWriter, r *rcRequest) {
 	l(r).Printf("Forwarding request to upstream")
 	r.http.RequestURI = ""
 	r.http.Host = ""
