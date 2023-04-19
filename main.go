@@ -39,19 +39,19 @@ var (
 type RCPushNotification struct {
 	Token   string `json:"token"`
 	Options struct {
-		CreatedAt  string          `json:"createdAt"`
-		CreatedBy  string          `json:"createdBy"`
-		Sent       bool            `json:"sent"`
-		Sending    int             `json:"sending"`
-		From       string          `json:"from"`
-		Title      string          `json:"title"`
-		Text       string          `json:"text"`
-		UserId     string          `json:"userId"`
-		RawPayload json.RawMessage `json:"payload"`
-		Badge      int             `json:"badge"`
-		Sound      string          `json:"sound"`
-		NotId      int             `json:"notId"`
-		Apn        struct {
+		CreatedAt string    `json:"createdAt"`
+		CreatedBy string    `json:"createdBy"`
+		Sent      bool      `json:"sent"`
+		Sending   int       `json:"sending"`
+		From      string    `json:"from"`
+		Title     string    `json:"title"`
+		Text      string    `json:"text"`
+		UserId    string    `json:"userId"`
+		Payload   RCPayload `json:"payload"`
+		Badge     int       `json:"badge"`
+		Sound     string    `json:"sound"`
+		NotId     int       `json:"notId"`
+		Apn       struct {
 			Category string `json:"category"`
 			Text     string `json:"text"`
 		} `json:"apn"`
@@ -68,22 +68,22 @@ type RCPayload struct {
 	Host             string `json:"host"`
 	MessageId        string `json:"messageId"`
 	NotificationType string `json:"notificationType"`
-	Rid              string `json:"rid"`
+	Rid              string `json:"rid,omitempty"`
 	Sender           struct {
-		Id       string `json:"_id"`
-		Username string `json:"username"`
-		Name     string `json:"name"`
-	} `json:"sender"`
-	SenderName string `json:"senderName"`
-	Type       string `json:"type"`
+		Id       string `json:"_id,omitempty"`
+		Username string `json:"username,omitempty"`
+		Name     string `json:"name,omitempty"`
+	} `json:"sender,omitempty"`
+	SenderName string `json:"senderName,omitempty"`
+	Type       string `json:"type,omitempty"`
 }
 
 type rcRequest struct {
-	id      uint
-	http    *http.Request
-	body    []byte
-	data    RCPushNotification
-	payload RCPayload
+	id    uint
+	http  *http.Request
+	body  []byte
+	data  RCPushNotification
+	ejson []byte
 }
 
 type reqLogger struct {
@@ -180,11 +180,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest)) func(http.Resp
 			return
 		}
 
-		err = json.Unmarshal(r.data.Options.RawPayload, &r.payload)
-		if err != nil {
-			l(r).Errorf("Failed to parse request payload: %v", err)
-		}
-
+		r.ejson, _ = json.Marshal(r.data.Options.Payload)
 		handler(w, r)
 	}
 }
@@ -192,6 +188,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest)) func(http.Resp
 func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWriter, *rcRequest) {
 	return func(w http.ResponseWriter, r *rcRequest) {
 		opt := &r.data.Options
+		l(r).Printf("APN from %s to %s", opt.Payload.Host, opt.Topic)
 
 		if opt.Topic == apnsUpstreamTopic {
 			forward(w, r)
@@ -204,15 +201,13 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			return
 		}
 
-		l(r).Printf("APN from %s to %s", r.payload.Host, opt.Topic)
-
 		// Create the notification payload
 		p := apnsPayload.NewPayload().
 			AlertTitle(opt.Title).
 			AlertBody(opt.Text).
 			Badge(opt.Badge).
 			Sound(opt.Sound).
-			Custom("ejson", string(opt.RawPayload))
+			Custom("ejson", string(r.ejson))
 
 		if opt.Apn.Category != "" {
 			p.Category(opt.Apn.Category)
@@ -222,9 +217,8 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			p.AlertBody(opt.Apn.Text)
 		}
 
-		if r.payload.NotificationType == "message-id-only" {
+		if opt.Payload.NotificationType == "message-id-only" {
 			p.MutableContent()
-			p.ContentAvailable()
 		}
 
 		// Create the notification
@@ -234,8 +228,8 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 			Payload:     p,
 		}
 
-		nJSON, _ := n.MarshalJSON()
-		l(r).Debugf("Sending notification: %s", nJSON)
+		nJson, _ := n.MarshalJSON()
+		l(r).Debugf("Sending notification: %s", nJson)
 
 		// Send the notification
 		res, err := client.Push(n)
@@ -268,12 +262,11 @@ func getAPNPushNotificationHandler(client *apns2.Client) func(http.ResponseWrite
 
 func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseWriter, *rcRequest) {
 	return func(w http.ResponseWriter, r *rcRequest) {
-		l(r).Printf("GCM from %s", r.payload.Host)
-
 		opt := r.data.Options
+		l(r).Printf("GCM from %s", opt.Payload.Host)
 
 		data := map[string]string{
-			"ejson":   string(opt.RawPayload),
+			"ejson":   string(r.ejson),
 			"title":   opt.Title,
 			"message": opt.Text,
 			"text":    opt.Text,
@@ -292,6 +285,9 @@ func getGCMPushNotificationHandler(client *messaging.Client) func(http.ResponseW
 				Data:        data,
 			},
 		}
+
+		msgJson, _ := json.Marshal(msg)
+		l(r).Debugf("Sending notification: %s", msgJson)
 
 		_, err := client.Send(context.Background(), msg)
 		if err != nil {
