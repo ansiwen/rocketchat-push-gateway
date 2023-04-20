@@ -4,7 +4,7 @@ ADD src /src
 
 WORKDIR /src
 
-RUN go build .
+RUN go build -ldflags="-s -w" .
 
 FROM alpine
 
