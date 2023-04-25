@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	_ "github.com/joho/godotenv/autoload"
@@ -186,6 +187,8 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 	r.http.Host = ""
 	r.http.URL.Scheme = "https"
 	r.http.URL.Host = upstreamGateway
+	path := r.http.URL.Path
+	r.http.URL.Path = path[strings.LastIndex(path, "/push/"):]
 	r.http.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(r.body)), nil
 	}
