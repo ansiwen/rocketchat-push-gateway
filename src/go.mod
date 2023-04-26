@@ -6,7 +6,7 @@ require (
 	firebase.google.com/go/v4 v4.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/sideshow/apns2 v0.23.0
-	google.golang.org/api v0.119.0
+	google.golang.org/api v0.120.0
 )
 
 require (
