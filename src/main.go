@@ -105,10 +105,25 @@ func (l reqLogger) Errorf(s string, v ...any) {
 	l.Printf(s, v...)
 }
 
+var infoText = `
+<!DOCTYPE html>
+<html><head>
+<title>Rocket.Chat Push Gateway</title>
+</head><body>
+<h2>Rocket.Chat Push Gateway</h2>
+<p>See <a href="https://github.com/ansiwen/rocketchat-push-gateway">
+https://github.com/ansiwen/rocketchat-push-gateway</a></p>
+</body></html>
+`
+
 func main() {
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
-		log.Printf("InfoHandler for: %+v", req)
-		io.WriteString(w, "Rocket.Chat Push Gateway\n")
+		remote := req.RemoteAddr
+		if r, ok := req.Header["X-Forwarded-For"]; ok {
+			remote += ";X-Forwarded-For:" + strings.Join(r, ";")
+		}
+		log.Printf("InfoHandler for %s from %s", req.RequestURI, remote)
+		io.WriteString(w, infoText)
 	}
 	http.HandleFunc("/", infoHandler)
 
