@@ -77,7 +77,7 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			if res.Reason == apns2.ReasonBadDeviceToken ||
 				res.Reason == apns2.ReasonDeviceTokenNotForTopic ||
 				res.Reason == apns2.ReasonUnregistered {
-				l(r).Printf("Deleting invalid token: %+v", r.data.Token)
+				l(r).Printf("Deleting invalid token: %s", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
@@ -86,10 +86,8 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			return
 		}
 
-		// Log the response
 		l(r).Debugf("Notification sent: %+v", res)
 
-		// Send a success response
 		w.WriteHeader(http.StatusOK)
 	}
 }

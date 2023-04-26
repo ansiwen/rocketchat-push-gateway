@@ -100,8 +100,12 @@ func (l reqLogger) Debugf(s string, v ...any) {
 }
 
 func (l reqLogger) Errorf(s string, v ...any) {
-	s = s + "\nRequest: %+v\nBody: %s"
-	v = append(v, l.r.http, l.r.body)
+	s = s + "\nRequest: %+v"
+	v = append(v, l.r.http)
+	if l.r.data.Token != "" {
+		s = s + "\nToken: %s"
+		v = append(v, l.r.data.Token)
+	}
 	l.Printf(s, v...)
 }
 
