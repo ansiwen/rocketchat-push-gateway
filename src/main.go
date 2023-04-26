@@ -43,15 +43,15 @@ type RCPushNotification struct {
 		Badge     int       `json:"badge"`
 		Sound     string    `json:"sound"`
 		NotId     int       `json:"notId"`
-		Apn       struct {
-			Category string `json:"category"`
-			Text     string `json:"text"`
-		} `json:"apn"`
-		Gcm struct {
-			Image string `json:"image"`
-			Style string `json:"style"`
-		} `json:"gcm"`
-		Topic    string `json:"topic"`
+		Apn       *struct {
+			Category string `json:"category,omitempty"`
+			Text     string `json:"text,omitempty"`
+		} `json:"apn,omitempty"`
+		Gcm *struct {
+			Image string `json:"image,omitempty"`
+			Style string `json:"style,omitempty"`
+		} `json:"gcm,omitempty"`
+		Topic    string `json:"topic,omitempty"`
 		UniqueId string `json:"uniqueId"`
 	} `json:"options"`
 }
@@ -185,6 +185,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 				NotificationType: pl.NotificationType,
 			}
 			r.data.Options.Payload.NotificationType = "message-id-only"
+			r.body = nil
 		}
 
 		r.ejson, _ = json.Marshal(r.data.Options.Payload)
@@ -208,6 +209,15 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 	r.http.URL.Host = upstreamGateway
 	path := r.http.URL.Path
 	r.http.URL.Path = path[strings.LastIndex(path, "/push/"):]
+	if r.body == nil {
+		var err error
+		r.body, err = json.Marshal(r.data)
+		if err != nil {
+			l(r).Errorf("Failed to create filtered body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
 	r.http.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(r.body)), nil
 	}
