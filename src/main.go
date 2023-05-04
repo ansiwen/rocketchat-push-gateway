@@ -31,18 +31,18 @@ var (
 type RCPushNotification struct {
 	Token   string `json:"token"`
 	Options struct {
-		CreatedAt string    `json:"createdAt"`
-		CreatedBy string    `json:"createdBy"`
-		Sent      bool      `json:"sent"`
-		Sending   int       `json:"sending"`
-		From      string    `json:"from"`
-		Title     string    `json:"title"`
-		Text      string    `json:"text"`
-		UserId    string    `json:"userId"`
-		Payload   RCPayload `json:"payload"`
-		Badge     int       `json:"badge"`
-		Sound     string    `json:"sound"`
-		NotId     int       `json:"notId"`
+		CreatedAt string     `json:"createdAt"`
+		CreatedBy string     `json:"createdBy"`
+		Sent      bool       `json:"sent"`
+		Sending   int        `json:"sending"`
+		From      string     `json:"from"`
+		Title     string     `json:"title"`
+		Text      string     `json:"text"`
+		UserId    string     `json:"userId"`
+		Payload   *RCPayload `json:"payload,omitempty"`
+		Badge     int        `json:"badge,omitempty"`
+		Sound     string     `json:"sound"`
+		NotId     int        `json:"notId,omitempty"`
 		Apn       *struct {
 			Category string `json:"category,omitempty"`
 			Text     string `json:"text,omitempty"`
@@ -126,7 +126,7 @@ func main() {
 		if r, ok := req.Header["X-Forwarded-For"]; ok {
 			remote += ";X-Forwarded-For:" + strings.Join(r, ";")
 		}
-		log.Printf("InfoHandler for %s from %s", req.RequestURI, remote)
+		log.Printf("InfoHandler for %s from %s", req.RequestURI, getRemote(req))
 		io.WriteString(w, infoText)
 	}
 	http.HandleFunc("/", infoHandler)
@@ -142,6 +142,14 @@ func main() {
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
+}
+
+func getRemote(req *http.Request) string {
+	remote := req.RemoteAddr
+	if r, ok := req.Header["X-Forwarded-For"]; ok {
+		remote += ";X-Forwarded-For:" + strings.Join(r, ",")
+	}
+	return remote
 }
 
 func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) func(http.ResponseWriter, *http.Request) {
@@ -173,22 +181,28 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 			return
 		}
 
-		l(r).Printf("%s requested from %s", r.http.URL.RequestURI(), r.data.Options.Payload.Host)
+		remote := getRemote(http_)
+		if r.data.Options.Payload != nil && r.data.Options.Payload.Host != "" {
+			remote += ";Host:" + r.data.Options.Payload.Host
+		}
 
-		if filter && r.data.Options.Payload.NotificationType != "message-id-only" {
+		l(r).Printf("%s requested from %s", r.http.URL.RequestURI(), remote)
+
+		if filter && r.data.Options.Payload != nil && r.data.Options.Payload.NotificationType == "message" {
 			r.data.Options.Title = ""
 			r.data.Options.Text = "You have a new message"
 			pl := r.data.Options.Payload
-			r.data.Options.Payload = RCPayload{
+			r.data.Options.Payload = &RCPayload{
 				Host:             pl.Host,
 				MessageId:        pl.MessageId,
-				NotificationType: pl.NotificationType,
+				NotificationType: "message-id-only",
 			}
-			r.data.Options.Payload.NotificationType = "message-id-only"
 			r.body = nil
 		}
 
-		r.ejson, _ = json.Marshal(r.data.Options.Payload)
+		if r.data.Options.Payload != nil {
+			r.ejson, _ = json.Marshal(r.data.Options.Payload)
+		}
 		handler(w, r)
 	}
 }
@@ -217,6 +231,8 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		r.http.Header.Del("Content-Length")
+		r.http.ContentLength = -1
 	}
 	r.http.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(r.body)), nil

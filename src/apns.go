@@ -52,7 +52,7 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			}
 		}
 
-		if opt.Payload.NotificationType == "message-id-only" {
+		if opt.Payload != nil && opt.Payload.NotificationType == "message-id-only" {
 			p.MutableContent()
 		}
 
