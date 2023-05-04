@@ -32,11 +32,16 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			"title":   opt.Title,
 			"message": opt.Text,
 			"text":    opt.Text,
-			"image":   opt.Gcm.Image,
 			"msgcnt":  fmt.Sprint(opt.Badge),
 			"sound":   opt.Sound,
 			"notId":   fmt.Sprint(opt.NotId),
-			"style":   opt.Gcm.Style,
+			"image":   "",
+			"style":   "",
+		}
+
+		if opt.Gcm != nil {
+			data["image"] = opt.Gcm.Image
+			data["style"] = opt.Gcm.Style
 		}
 
 		msg := &messaging.Message{

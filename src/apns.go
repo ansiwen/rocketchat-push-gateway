@@ -43,12 +43,13 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			Sound(opt.Sound).
 			Custom("ejson", string(r.ejson))
 
-		if opt.Apn.Category != "" {
-			p.Category(opt.Apn.Category)
-		}
-
-		if opt.Apn.Text != "" {
-			p.AlertBody(opt.Apn.Text)
+		if opt.Apn != nil {
+			if opt.Apn.Category != "" {
+				p.Category(opt.Apn.Category)
+			}
+			if opt.Apn.Text != "" {
+				p.AlertBody(opt.Apn.Text)
+			}
 		}
 
 		if opt.Payload.NotificationType == "message-id-only" {
