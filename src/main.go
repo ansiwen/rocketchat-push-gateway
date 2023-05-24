@@ -78,35 +78,25 @@ type rcRequest struct {
 	ejson []byte
 }
 
-type reqLogger struct {
-	r *rcRequest
-}
-
-func l(r *rcRequest) reqLogger {
-	return reqLogger{r}
-}
-
-func (l reqLogger) Printf(s string, v ...any) {
-	id := fmt.Sprintf("[%d]", l.r.id)
+func (r *rcRequest) Printf(s string, v ...any) {
+	id := fmt.Sprintf("[%d]", r.id)
 	s = id + " " + s
 	log.Printf(s, v...)
 }
 
-func (l reqLogger) Debugf(s string, v ...any) {
+func (r *rcRequest) Debugf(s string, v ...any) {
 	if !debug {
 		return
 	}
-	l.Printf(s, v...)
+	r.Printf(s, v...)
 }
 
-func (l reqLogger) Errorf(s string, v ...any) {
+func (r *rcRequest) Errorf(s string, v ...any) {
 	s = s + "\nRequest: %+v"
-	v = append(v, l.r.http)
-	if l.r.data.Token != "" {
-		s = s + "\nToken: %s"
-		v = append(v, l.r.data.Token)
-	}
-	l.Printf(s, v...)
+	v = append(v, r.http)
+	s = s + "\nBody: %s"
+	v = append(v, r.body)
+	r.Printf(s, v...)
 }
 
 var infoText = `
@@ -157,7 +147,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 		r := &rcRequest{http: http_}
 		r.id = uint(reqId.Add(1))
 		if r.http.Method != http.MethodPost {
-			l(r).Errorf("Method not allowed: %v", r.http.Method)
+			r.Errorf("Method not allowed: %v", r.http.Method)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -166,17 +156,17 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 		var err error
 		r.body, err = ioutil.ReadAll(http_.Body)
 		if err != nil {
-			l(r).Errorf("Failed to read request body: %v", err)
+			r.Errorf("Failed to read request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
-		l(r).Debugf("Received push request: %+v %s", http_, r.body)
+		r.Debugf("Received push request: %+v %s", http_, r.body)
 
 		// Parse the request body
 		err = json.Unmarshal(r.body, &r.data)
 		if err != nil {
-			l(r).Errorf("Failed to parse request body: %v", err)
+			r.Errorf("Failed to parse request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -186,7 +176,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 			remote += ";Host:" + r.data.Options.Payload.Host
 		}
 
-		l(r).Printf("%s requested from %s", r.http.URL.RequestURI(), remote)
+		r.Printf("%s requested from %s", r.http.URL.RequestURI(), remote)
 
 		if filter && r.data.Options.Payload != nil && r.data.Options.Payload.NotificationType == "message" {
 			r.data.Options.Title = ""
@@ -216,7 +206,6 @@ func copyHeader(dst, src http.Header) {
 }
 
 func forward(w http.ResponseWriter, r *rcRequest) {
-	l(r).Printf("Forwarding request to upstream")
 	r.http.RequestURI = ""
 	r.http.Host = ""
 	r.http.URL.Scheme = "https"
@@ -227,12 +216,12 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 		var err error
 		r.body, err = json.Marshal(r.data)
 		if err != nil {
-			l(r).Errorf("Failed to create filtered body: %v", err)
+			r.Errorf("Failed to create filtered body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		r.http.Header.Del("Content-Length")
-		r.http.ContentLength = -1
+		r.http.ContentLength = int64(len(r.body))
 	}
 	r.http.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(r.body)), nil
@@ -242,7 +231,7 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 
 	resp, err := http.DefaultClient.Do(r.http)
 	if err != nil {
-		l(r).Errorf("Failed to forward request: %v", err)
+		r.Errorf("Failed to forward request: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -250,10 +239,12 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 	body, _ := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	l(r).Debugf("Response from upstream: %+v %s", resp, body)
+	r.Debugf("Response from upstream: %+v %s", resp, body)
 	copyHeader(w.Header(), resp.Header)
 	if resp.StatusCode >= 300 {
-		l(r).Errorf("Forwarding failed: %+v", resp)
+		r.Printf("Forwarding failed: %s %s", resp.Status, body)
+	} else {
+		r.Printf("Forwarded request to upstream")
 	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(body)

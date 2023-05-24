@@ -30,7 +30,7 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 		}
 
 		if opt.Topic != apnsTopic {
-			l(r).Errorf("Unknown APNs topic: %s", opt.Topic)
+			r.Errorf("Unknown APNs topic: %s", opt.Topic)
 			w.WriteHeader(http.StatusNotAcceptable)
 			return
 		}
@@ -64,12 +64,12 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 		}
 
 		nJson, _ := n.MarshalJSON()
-		l(r).Debugf("Sending notification: %s", nJson)
+		r.Debugf("Sending notification: %s", nJson)
 
 		// Send the notification
 		res, err := client.Push(n)
 		if err != nil {
-			l(r).Errorf("Failed to send notification: %v", err)
+			r.Errorf("Failed to send notification: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -78,17 +78,18 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			if res.Reason == apns2.ReasonBadDeviceToken ||
 				res.Reason == apns2.ReasonDeviceTokenNotForTopic ||
 				res.Reason == apns2.ReasonUnregistered {
-				l(r).Printf("Deleting invalid token: %s", r.data.Token)
+				r.Printf("Deleting invalid token: %s", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
-			l(r).Errorf("Failed to send notification: %+v", res)
+			r.Errorf("Failed to send notification: %+v", res)
 			w.WriteHeader(res.StatusCode)
 			return
 		}
 
-		l(r).Debugf("Notification sent: %+v", res)
+		r.Debugf("Notification sent: %+v", res)
 
 		w.WriteHeader(http.StatusOK)
+		r.Printf("Notification sent to APNS")
 	}
 }

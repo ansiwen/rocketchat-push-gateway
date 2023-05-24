@@ -54,12 +54,12 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 		}
 
 		msgJson, _ := json.Marshal(msg)
-		l(r).Debugf("Sending notification: %s", msgJson)
+		r.Debugf("Sending notification: %s", msgJson)
 
 		_, err := client.Send(context.Background(), msg)
 		if err != nil {
 			if messaging.IsUnregistered(err) {
-				l(r).Printf("Deleting invalid token: %s", r.data.Token)
+				r.Printf("Deleting invalid token: %s", r.data.Token)
 				w.WriteHeader(http.StatusNotAcceptable)
 				return
 			}
@@ -67,12 +67,12 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 				forward(w, r)
 				return
 			}
-			l(r).Errorf("error sending FCM msg: %v", err)
+			r.Errorf("error sending FCM msg: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		return
+		r.Printf("Notification sent to FCM")
 	}
 }
