@@ -11,7 +11,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -172,27 +174,27 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 		}
 
 		remote := getRemote(http_)
-		if r.data.Options.Payload != nil && r.data.Options.Payload.Host != "" {
-			remote += ";Host:" + r.data.Options.Payload.Host
+
+		if r.data.Options.Payload != nil {
+			if r.data.Options.Payload.Host != "" {
+				remote += ";Host:" + r.data.Options.Payload.Host
+			}
+			if filter && r.data.Options.Payload.NotificationType == "message" {
+				r.data.Options.Title = ""
+				r.data.Options.Text = "You have a new message"
+				pl := r.data.Options.Payload
+				r.data.Options.Payload = &RCPayload{
+					Host:             pl.Host,
+					MessageId:        pl.MessageId,
+					NotificationType: "message-id-only",
+				}
+				r.body = nil
+			}
+			r.ejson, _ = json.Marshal(r.data.Options.Payload)
 		}
 
 		r.Printf("%s requested from %s", r.http.URL.RequestURI(), remote)
 
-		if filter && r.data.Options.Payload != nil && r.data.Options.Payload.NotificationType == "message" {
-			r.data.Options.Title = ""
-			r.data.Options.Text = "You have a new message"
-			pl := r.data.Options.Payload
-			r.data.Options.Payload = &RCPayload{
-				Host:             pl.Host,
-				MessageId:        pl.MessageId,
-				NotificationType: "message-id-only",
-			}
-			r.body = nil
-		}
-
-		if r.data.Options.Payload != nil {
-			r.ejson, _ = json.Marshal(r.data.Options.Payload)
-		}
 		handler(w, r)
 	}
 }
@@ -205,7 +207,42 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
+const disabledDelay = time.Hour
+
+var (
+	disabled    = map[string]time.Time{}
+	disabledMtx sync.RWMutex
+)
+
+func isDisabled(id string) bool {
+	disabledMtx.RLock()
+	t, ok := disabled[id]
+	disabledMtx.RUnlock()
+	if ok {
+		if time.Now().Before(t) {
+			return true
+		} else {
+			disabledMtx.Lock()
+			delete(disabled, id)
+			disabledMtx.Unlock()
+		}
+	}
+	return false
+}
+
+func disable(id string) {
+	disabledMtx.Lock()
+	disabled[id] = time.Now().Add(disabledDelay)
+	disabledMtx.Unlock()
+}
+
 func forward(w http.ResponseWriter, r *rcRequest) {
+	if isDisabled(r.data.Options.UniqueId) {
+		r.Printf("Forwarding disabled")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+
 	r.http.RequestURI = ""
 	r.http.Host = ""
 	r.http.URL.Scheme = "https"
@@ -243,6 +280,9 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 	copyHeader(w.Header(), resp.Header)
 	if resp.StatusCode >= 300 {
 		r.Printf("Forwarding failed: %s %s", resp.Status, body)
+		if resp.StatusCode == 422 {
+			disable(r.data.Options.UniqueId)
+		}
 	} else {
 		r.Printf("Forwarded request to upstream")
 	}
