@@ -12,7 +12,10 @@ import (
 
 const disabledDelay = time.Hour
 
-var stats sync.Map
+var (
+	stats     sync.Map
+	startTime = time.Now()
+)
 
 type status struct {
 	id            string
@@ -72,8 +75,9 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 </style>
 </head><body>
-<h2>Rocket.Chat Push Gateway Stats</h2>
-<table><thead><tr>
+<h2>Rocket.Chat Push Gateway Stats</h2>`
+	out += fmt.Sprintf("<p>Uptime: %s</p>", time.Since(startTime).Truncate(time.Second))
+	out += `<table><thead><tr>
 <th>id</th><th>ip</th><th>host</th><th>direct</th><th>apn</th><th>fcm</th><th>forwards</th>
 </tr></thead><tbody>
 `
