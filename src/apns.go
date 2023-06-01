@@ -22,6 +22,8 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 	client := apns2.NewClient(cert).Production()
 
 	return func(w http.ResponseWriter, r *rcRequest) {
+		r.stats.apn.Add(1)
+
 		opt := &r.data.Options
 
 		if opt.Topic == apnsUpstreamTopic {

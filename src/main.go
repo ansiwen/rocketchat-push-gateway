@@ -11,9 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -78,6 +76,7 @@ type rcRequest struct {
 	body  []byte
 	data  RCPushNotification
 	ejson []byte
+	stats *status
 }
 
 func (r *rcRequest) Printf(s string, v ...any) {
@@ -101,6 +100,17 @@ func (r *rcRequest) Errorf(s string, v ...any) {
 	r.Printf(s, v...)
 }
 
+func getIp(r *http.Request) string {
+	var ip string
+	fwdHdr := r.Header["X-Forwarded-For"]
+	if len(fwdHdr) == 0 {
+		ip = strings.Split(r.RemoteAddr, ":")[0]
+	} else {
+		ip = fwdHdr[0]
+	}
+	return ip
+}
+
 var infoText = `
 <!DOCTYPE html>
 <html><head>
@@ -114,14 +124,12 @@ https://github.com/ansiwen/rocketchat-push-gateway</a></p>
 
 func main() {
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
-		remote := req.RemoteAddr
-		if r, ok := req.Header["X-Forwarded-For"]; ok {
-			remote += ";X-Forwarded-For:" + strings.Join(r, ";")
-		}
-		log.Printf("InfoHandler for %s from %s", req.RequestURI, getRemote(req))
+		log.Printf("InfoHandler for %s from %s", req.RequestURI, getIp(req))
 		io.WriteString(w, infoText)
 	}
 	http.HandleFunc("/", infoHandler)
+
+	http.HandleFunc("/stats", statsHandler)
 
 	// Define the HTTP server and routes
 	http.HandleFunc("/push/gcm/send", withRCRequest(getGCMPushNotificationHandler(), false))
@@ -134,14 +142,6 @@ func main() {
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
-}
-
-func getRemote(req *http.Request) string {
-	remote := req.RemoteAddr
-	if r, ok := req.Header["X-Forwarded-For"]; ok {
-		remote += ";X-Forwarded-For:" + strings.Join(r, ",")
-	}
-	return remote
 }
 
 func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) func(http.ResponseWriter, *http.Request) {
@@ -173,12 +173,10 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 			return
 		}
 
-		remote := getRemote(http_)
+		var host string
 
 		if r.data.Options.Payload != nil {
-			if r.data.Options.Payload.Host != "" {
-				remote += ";Host:" + r.data.Options.Payload.Host
-			}
+			host = r.data.Options.Payload.Host
 			if filter && r.data.Options.Payload.NotificationType == "message" {
 				r.data.Options.Title = ""
 				r.data.Options.Text = "You have a new message"
@@ -193,7 +191,15 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 			r.ejson, _ = json.Marshal(r.data.Options.Payload)
 		}
 
-		r.Printf("%s requested from %s", r.http.URL.RequestURI(), remote)
+		ip := getIp(r.http)
+
+		r.stats = getStats(r.data.Options.UniqueId, ip, host)
+
+		r.Printf("%s requested from %s;Id:%s;Host:%s",
+			r.http.URL.RequestURI(),
+			ip,
+			r.data.Options.UniqueId,
+			host)
 
 		handler(w, r)
 	}
@@ -207,37 +213,10 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
-const disabledDelay = time.Hour
-
-var (
-	disabled    = map[string]time.Time{}
-	disabledMtx sync.RWMutex
-)
-
-func isDisabled(id string) bool {
-	disabledMtx.RLock()
-	t, ok := disabled[id]
-	disabledMtx.RUnlock()
-	if ok {
-		if time.Now().Before(t) {
-			return true
-		} else {
-			disabledMtx.Lock()
-			delete(disabled, id)
-			disabledMtx.Unlock()
-		}
-	}
-	return false
-}
-
-func disable(id string) {
-	disabledMtx.Lock()
-	disabled[id] = time.Now().Add(disabledDelay)
-	disabledMtx.Unlock()
-}
-
 func forward(w http.ResponseWriter, r *rcRequest) {
-	if isDisabled(r.data.Options.UniqueId) {
+	r.stats.forwarded.Add(1)
+
+	if r.stats.isDisabled() {
 		r.Printf("Forwarding disabled")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
@@ -281,7 +260,7 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 	if resp.StatusCode >= 300 {
 		r.Printf("Forwarding failed: %s %s", resp.Status, body)
 		if resp.StatusCode == 422 {
-			disable(r.data.Options.UniqueId)
+			r.stats.disable()
 		}
 	} else {
 		r.Printf("Forwarded request to upstream")

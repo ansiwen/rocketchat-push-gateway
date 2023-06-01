@@ -25,6 +25,8 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 	}
 
 	return func(w http.ResponseWriter, r *rcRequest) {
+		r.stats.fcm.Add(1)
+
 		opt := r.data.Options
 
 		data := map[string]string{
