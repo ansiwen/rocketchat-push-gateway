@@ -33,7 +33,6 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			"ejson":   string(r.ejson),
 			"title":   opt.Title,
 			"message": opt.Text,
-			"text":    opt.Text,
 			"msgcnt":  fmt.Sprint(opt.Badge),
 			"sound":   opt.Sound,
 			"notId":   fmt.Sprint(opt.NotId),
