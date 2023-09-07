@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -24,10 +23,10 @@ const (
 var (
 	apnsTopic = os.Getenv("RCPG_APNS_TOPIC")
 	debug, _  = strconv.ParseBool(os.Getenv("RCPG_DEBUG"))
-	reqId     atomic.Uintptr
+	reqID     atomic.Uintptr
 )
 
-// Define a struct to hold the JSON payload
+// RCPushNotification is a struct to hold the JSON payload
 type RCPushNotification struct {
 	Token   string `json:"token"`
 	Options struct {
@@ -38,11 +37,11 @@ type RCPushNotification struct {
 		From      string     `json:"from"`
 		Title     string     `json:"title"`
 		Text      string     `json:"text"`
-		UserId    string     `json:"userId"`
+		UserID    string     `json:"userId"`
 		Payload   *RCPayload `json:"payload,omitempty"`
 		Badge     int        `json:"badge,omitempty"`
 		Sound     string     `json:"sound"`
-		NotId     int        `json:"notId,omitempty"`
+		NotID     int        `json:"notId,omitempty"`
 		Apn       *struct {
 			Category string `json:"category,omitempty"`
 			Text     string `json:"text,omitempty"`
@@ -52,17 +51,17 @@ type RCPushNotification struct {
 			Style string `json:"style,omitempty"`
 		} `json:"gcm,omitempty"`
 		Topic    string `json:"topic,omitempty"`
-		UniqueId string `json:"uniqueId"`
+		UniqueID string `json:"uniqueId"`
 	} `json:"options"`
 }
 
 type RCPayload struct {
 	Host             string `json:"host"`
-	MessageId        string `json:"messageId"`
+	MessageID        string `json:"messageId"`
 	NotificationType string `json:"notificationType"`
 	Rid              string `json:"rid,omitempty"`
 	Sender           *struct {
-		Id       string `json:"_id,omitempty"`
+		ID       string `json:"_id,omitempty"`
 		Username string `json:"username,omitempty"`
 		Name     string `json:"name,omitempty"`
 	} `json:"sender,omitempty"`
@@ -100,7 +99,7 @@ func (r *rcRequest) Errorf(s string, v ...any) {
 	r.Printf(s, v...)
 }
 
-func getIp(r *http.Request) string {
+func getIP(r *http.Request) string {
 	var ip string
 	fwdHdr := r.Header["X-Forwarded-For"]
 	if len(fwdHdr) == 0 {
@@ -124,7 +123,7 @@ https://github.com/ansiwen/rocketchat-push-gateway</a></p>
 
 func main() {
 	infoHandler := func(w http.ResponseWriter, req *http.Request) {
-		log.Printf("InfoHandler for %s from %s", req.RequestURI, getIp(req))
+		log.Printf("InfoHandler for %s from %s", req.RequestURI, getIP(req))
 		io.WriteString(w, infoText)
 	}
 	http.HandleFunc("/", infoHandler)
@@ -147,7 +146,7 @@ func main() {
 func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, http_ *http.Request) {
 		r := &rcRequest{http: http_}
-		r.id = uint(reqId.Add(1))
+		r.id = uint(reqID.Add(1))
 		if r.http.Method != http.MethodPost {
 			r.Errorf("Method not allowed: %v", r.http.Method)
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -156,7 +155,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 
 		// Read the request body
 		var err error
-		r.body, err = ioutil.ReadAll(http_.Body)
+		r.body, err = io.ReadAll(http_.Body)
 		if err != nil {
 			r.Errorf("Failed to read request body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -183,7 +182,7 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 				pl := r.data.Options.Payload
 				r.data.Options.Payload = &RCPayload{
 					Host:             pl.Host,
-					MessageId:        pl.MessageId,
+					MessageID:        pl.MessageID,
 					NotificationType: "message-id-only",
 				}
 				r.body = nil
@@ -191,14 +190,14 @@ func withRCRequest(handler func(http.ResponseWriter, *rcRequest), filter bool) f
 			r.ejson, _ = json.Marshal(r.data.Options.Payload)
 		}
 
-		ip := getIp(r.http)
+		ip := getIP(r.http)
 
-		r.stats = getStats(r.data.Options.UniqueId, ip, host)
+		r.stats = getStats(r.data.Options.UniqueID, ip, host)
 
 		r.Printf("%s requested from %s;Id:%s;Host:%s",
 			r.http.URL.RequestURI(),
 			ip,
-			r.data.Options.UniqueId,
+			r.data.Options.UniqueID,
 			host)
 
 		handler(w, r)
@@ -252,7 +251,7 @@ func forward(w http.ResponseWriter, r *rcRequest) {
 		return
 	}
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
 	r.Debugf("Response from upstream: %+v %s", resp, body)

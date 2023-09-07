@@ -35,7 +35,7 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			"message": opt.Text,
 			"msgcnt":  fmt.Sprint(opt.Badge),
 			"sound":   opt.Sound,
-			"notId":   fmt.Sprint(opt.NotId),
+			"notId":   fmt.Sprint(opt.NotID),
 			"image":   "",
 			"style":   "",
 		}
@@ -54,8 +54,8 @@ func getGCMPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			},
 		}
 
-		msgJson, _ := json.Marshal(msg)
-		r.Debugf("Sending notification: %s", msgJson)
+		msgJSON, _ := json.Marshal(msg)
+		r.Debugf("Sending notification: %s", msgJSON)
 
 		_, err := client.Send(context.Background(), msg)
 		if err != nil {

@@ -59,7 +59,7 @@ func getStats(id, ip, host string) *status {
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("StatsHandler for %s from %s", r.RequestURI, getIp(r))
+	log.Printf("StatsHandler for %s from %s", r.RequestURI, getIP(r))
 	out := `
 <!DOCTYPE html>
 <html><head>

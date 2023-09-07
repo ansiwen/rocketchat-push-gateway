@@ -65,8 +65,8 @@ func getAPNPushNotificationHandler() func(http.ResponseWriter, *rcRequest) {
 			Payload:     p,
 		}
 
-		nJson, _ := n.MarshalJSON()
-		r.Debugf("Sending notification: %s", nJson)
+		nJSON, _ := n.MarshalJSON()
+		r.Debugf("Sending notification: %s", nJSON)
 
 		// Send the notification
 		res, err := client.Push(n)
